@@ -92,7 +92,12 @@ BASE_HTML = r"""
 </html>
 """
 
-# ---------------- State ----------------
+# ---------------- Helpers ----------------
+def render_page(content_html: str, **ctx):
+    page = BASE_HTML.replace("{% block content %}{% endblock %}", content_html)
+    return render_template_string(page, **ctx)
+
+# ---------------- State ------------------
 def load_state() -> Dict[str, Any]:
     if os.path.exists(STATE_FILE):
         with open(STATE_FILE, "r", encoding="utf-8") as f:
@@ -320,7 +325,7 @@ def ollama_suggest(filename: str, ext: str, preview: Dict[str, Any], allowed_fol
         "options": {"temperature": 0.2}
     }
 
-    r = requests.post(OLLAMA_URL, json=payload, timeout=120)
+    r = requests.post(OLLAMA_URL, json=payload, timeout=600)
     r.raise_for_status()
     out = r.json().get("response", "").strip()
 
@@ -408,8 +413,6 @@ def home():
             counts["cand"] += 1
 
     html = """
-    {% extends base %}
-    {% block content %}
       <div class="card">
         <div class="row">
           <form method="post" action="{{url_for('set_root')}}" style="flex:1; min-width:320px;">
@@ -436,7 +439,8 @@ def home():
         <div class="row">
           <a class="btn" href="{{url_for('scan')}}">Scan folder</a>
           <a class="btn" href="{{url_for('review')}}">Review & tag (Never touch / Candidate)</a>
-          <a class="btn" href="{{url_for('suggest')}}">AI suggest for candidates</a>
+          <a class="btn" href="{{url_for('suggest')}}?limit=10">AI suggest (next 10)</a>
+          <a class="btn" href="{{url_for('suggest')}}?limit=25">AI suggest (next 25)</a>
           <a class="btn ok" href="{{url_for('apply')}}">Apply approved changes</a>
         </div>
       </div>
@@ -453,9 +457,8 @@ def home():
           Tip: Start with <b>Scan</b>, then in <b>Review</b> mark “Never touch”, then run <b>AI suggest</b>.
         </div>
       </div>
-    {% endblock %}
     """
-    return render_template_string(html, base=BASE_HTML, title=APP_TITLE, actions_log=ACTIONS_LOG, root=root, mode=state.get("mode", DEFAULT_MODE), counts=counts)
+    return render_page(html, base=BASE_HTML, title=APP_TITLE, actions_log=ACTIONS_LOG, root=root, mode=state.get("mode", DEFAULT_MODE), counts=counts)
 
 @app.post("/set-root")
 def set_root():
@@ -535,8 +538,6 @@ def review():
     rows.sort(key=lambda x: x["rel"].lower())
 
     html = """
-    {% extends base %}
-    {% block content %}
       <div class="card">
         <div class="row">
           <a class="btn" href="{{url_for('home')}}">← Home</a>
@@ -601,9 +602,8 @@ def review():
           </table>
         </form>
       </div>
-    {% endblock %}
     """
-    return render_template_string(
+    return render_page(
         html, base=BASE_HTML, title="Review & Tag", actions_log=ACTIONS_LOG,
         root=root, rows=rows, q=q, filt=filt, human_size=human_size
     )
@@ -649,8 +649,6 @@ def preview():
     kind = pv.get("kind", "")
 
     html = """
-    {% extends base %}
-    {% block content %}
       <div class="card">
         <div class="row">
           <a class="btn" href="{{url_for('review')}}">← Back</a>
@@ -666,15 +664,16 @@ def preview():
         <div class="muted">Extracted preview (for AI):</div>
         <pre style="white-space:pre-wrap; font-family: ui-monospace, Menlo, Consolas, monospace; font-size:12px;">{{text}}</pre>
       </div>
-    {% endblock %}
     """
-    return render_template_string(
+    return render_page(
         html, base=BASE_HTML, title="Preview", actions_log=ACTIONS_LOG,
         rel=rel, kind=kind, notes=notes, text=text, status=it.get("status", "candidate")
     )
 
 @app.get("/suggest")
 def suggest():
+    limit = int(request.args.get("limit", "10"))
+    limit = max(1, min(50, limit))
     state = load_state()
     root = state.get("root", "")
     items = state.get("items", {})
@@ -701,6 +700,9 @@ def suggest():
         items[rel] = it
         suggested += 1
 
+        if suggested >= limit:
+            break
+
         # tiny pause so UI doesn't feel frozen on slower PCs
         time.sleep(0.05)
 
@@ -721,8 +723,6 @@ def proposals():
     rows.sort(key=lambda x: (-(x["suggestion"].get("confidence", 0.0)), x["rel"].lower()))
 
     html = """
-    {% extends base %}
-    {% block content %}
       <div class="card">
         <div class="row">
           <a class="btn" href="{{url_for('home')}}">← Home</a>
@@ -776,14 +776,13 @@ def proposals():
           </div>
         </form>
       </div>
-    {% endblock %}
     """
     # Jinja can't access dot keys reliably, so map suggestion keys
     for r in rows:
         r["suggestion"] = r["suggestion"] or {}
         r["suggestion"]["confidence"] = float(r["suggestion"].get("confidence", 0.0))
         r["suggestion"]["reason"] = r["suggestion"].get("reason", "")
-    return render_template_string(
+    return render_page(
         html, base=BASE_HTML, title="AI Proposals", actions_log=ACTIONS_LOG,
         rows=rows, allowed=allowed
     )
@@ -849,8 +848,6 @@ def apply():
     save_state(state)
 
     html = """
-    {% extends base %}
-    {% block content %}
       <div class="card">
         <div class="row">
           <a class="btn" href="{{url_for('home')}}">← Home</a>
@@ -874,9 +871,8 @@ def apply():
           {% endfor %}
         </table>
       </div>
-    {% endblock %}
     """
-    return render_template_string(
+    return render_page(
         html, base=BASE_HTML, title="Apply Results", actions_log=ACTIONS_LOG,
         results=results, mode=mode
     )
