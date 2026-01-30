@@ -160,6 +160,9 @@ def safe_filename(name: str) -> str:
     name = name.rstrip(" .")
     return name[:180] if len(name) > 180 else name
 
+def rel_key(rel: str) -> str:
+    return hashlib.sha1(rel.encode("utf-8")).hexdigest()[:16]
+
 def relpath_under(root: Path, full: Path) -> str:
     return str(full.relative_to(root)).replace("\\", "/")
 
@@ -430,15 +433,13 @@ def openai_suggest(filename: str, ext: str, preview: Dict[str, Any], allowed_fol
     # Pull text output
     out_text = ""
     try:
-        # SDK returns output blocks; simplest is to join text parts
-        for item in resp.output:
-            for c in getattr(item, "content", []) or []:
-                if getattr(c, "type", "") in ("output_text", "text"):
-                    out_text += getattr(c, "text", "")
+        out_text = getattr(resp, "output_text", "") or ""
     except Exception:
+        out_text = ""
+    if not out_text.strip():
         out_text = str(resp)
-
     out_text = out_text.strip()
+
     # parse JSON similar to ollama_suggest
     start = out_text.find("{")
     end = out_text.rfind("}")
@@ -630,6 +631,7 @@ def scan():
                 st = p.stat()
                 items[rel] = {
                     "rel": rel,
+                    "key": rel_key(rel),
                     "name": p.name,
                     "ext": ext,
                     "size": st.st_size,
@@ -838,6 +840,8 @@ def suggest():
         items[rel] = it
         suggested += 1
 
+        print(f"[suggest] {suggested}/{limit} {rel}")
+
         if suggested >= limit:
             break
 
@@ -886,21 +890,21 @@ def proposals():
             {% for r in rows %}
             <tr>
               <td>
-                <input type="checkbox" name="appr" value="{{r.rel}}" {% if r.approved %}checked{% endif %}/>
+                <input type="checkbox" name="appr" value="{{r.key}}" {% if r.approved %}checked{% endif %}/>
               </td>
               <td>
                 <div class="mono">{{r.rel}}</div>
                 <div class="muted small"><a href="{{url_for('preview', rel=r.rel)}}">preview</a></div>
               </td>
               <td>
-                <select name="folder__{{r.rel}}">
+                <select name="folder__{{r.key}}">
                   {% for f in allowed %}
                     <option value="{{f}}" {% if r.edited_folder==f %}selected{% endif %}>{{f}}</option>
                   {% endfor %}
                 </select>
               </td>
               <td>
-                <input type="text" name="name__{{r.rel}}" value="{{r.edited_name}}"/>
+                <input type="text" name="name__{{r.key}}" value="{{r.edited_name}}"/>
               </td>
               <td class="mono">{{"%.2f"|format(r.suggestion.confidence)}}</td>
               <td class="small">{{r.suggestion.reason}}</td>
@@ -930,15 +934,29 @@ def proposals():
 def update_proposals():
     state = load_state()
     items = state.get("items", {})
-    approved_list = set(request.form.getlist("appr"))
+
+    # key -> rel lookup (only among items that exist)
+    key_to_rel = {}
+    for rel, it in items.items():
+        k = it.get("key")
+        if k:
+            key_to_rel[k] = rel
+
+    approved_keys = set(request.form.getlist("appr"))
 
     # Update edited fields
-    for rel, it in items.items():
+    for key, rel in key_to_rel.items():
+        it = items.get(rel)
+        if not it:
+            continue
         if it.get("status") != "candidate" or it.get("suggestion") is None:
             continue
-        it["approved"] = (rel in approved_list)
-        new_folder = request.form.get(f"folder__{rel}", it.get("edited_folder", UNSORTED_FOLDER))
-        new_name = request.form.get(f"name__{rel}", it.get("edited_name", it.get("name", "")))
+
+        it["approved"] = (key in approved_keys)
+
+        new_folder = request.form.get(f"folder__{key}", it.get("edited_folder", UNSORTED_FOLDER))
+        new_name = request.form.get(f"name__{key}", it.get("edited_name", it.get("name", "")))
+        
         it["edited_folder"] = new_folder
         it["edited_name"] = safe_filename(new_name)
         items[rel] = it
