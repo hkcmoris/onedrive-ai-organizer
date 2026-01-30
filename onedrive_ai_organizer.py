@@ -21,7 +21,10 @@ APP_TITLE = "OneDrive Downloads AI Organizer (Selective + Safe)"
 STATE_FILE = "organizer_state.json"
 ACTIONS_LOG = "organizer_actions_log.jsonl"
 
+NAMING_LOCALE = "cs-CZ"  # for filenames
+
 # ---- Configure your allowed folder taxonomy here ----
+UNSORTED_FOLDER = "__K_Protřídění__"  # folder for uncertain files
 ALLOWED_FOLDERS = [
     "Faktury/2018",
     "Faktury/2019",
@@ -40,7 +43,7 @@ ALLOWED_FOLDERS = [
     "Media/Screenshoty",
     "Media/Videa",
     "Instalačky",
-    "__K_Protřídění__",
+    UNSORTED_FOLDER,
 ]
 
 # ---- Ollama config ----
@@ -176,7 +179,7 @@ def extract_preview(path: Path) -> Dict[str, Any]:
         # Don't unpack; just leave metadata. (We can add filename listing later if you want.)
         return info
 
-    if ext in [".ai", ".psd"]:
+    if ext in [".ai", ".eps", ".psd"]:
         info["kind"] = "design"
         return info
 
@@ -299,8 +302,8 @@ def ollama_suggest(filename: str, ext: str, preview: Dict[str, Any], allowed_fol
     system = (
         "You are a careful file organization assistant. "
         "You must return ONLY valid JSON (no markdown, no commentary). "
-        "You propose a better filename and a destination folder from an allowed list. "
-        "If uncertain, set confidence low and choose _ToSort."
+        "You propose a better filename (in locale " + NAMING_LOCALE + ") and a destination folder from an allowed list. "
+        "If uncertain, set confidence low and choose " + UNSORTED_FOLDER + "."
     )
 
     user = {
@@ -311,10 +314,10 @@ def ollama_suggest(filename: str, ext: str, preview: Dict[str, Any], allowed_fol
         "allowed_folders": allowed_folders,
         "rules": [
             "Destination folder MUST be one of allowed_folders exactly.",
-            "Suggested filename must keep the same extension.",
+            "Suggested filename must be in locale " + NAMING_LOCALE + " and keep the same extension.",
             "Use clear names with dates if present (YYYY-MM-DD), otherwise omit date.",
             "Avoid overly long names; <= 80 characters before extension is ideal.",
-            "If you can't infer, pick folder _ToSort and keep filename similar.",
+            "If you can't infer, pick folder " + UNSORTED_FOLDER + " and keep filename similar.",
             "Return JSON with keys: suggested_name, suggested_folder, confidence (0..1), reason."
         ]
     }
@@ -336,7 +339,7 @@ def ollama_suggest(filename: str, ext: str, preview: Dict[str, Any], allowed_fol
     if start == -1 or end == -1 or end <= start:
         return {
             "suggested_name": filename,
-            "suggested_folder": "_ToSort",
+            "suggested_folder": UNSORTED_FOLDER,
             "confidence": 0.0,
             "reason": "Model did not return JSON."
         }
@@ -346,7 +349,7 @@ def ollama_suggest(filename: str, ext: str, preview: Dict[str, Any], allowed_fol
     except Exception:
         return {
             "suggested_name": filename,
-            "suggested_folder": "_ToSort",
+            "suggested_folder": UNSORTED_FOLDER,
             "confidence": 0.0,
             "reason": "Could not parse model JSON."
         }
@@ -356,9 +359,9 @@ def ollama_suggest(filename: str, ext: str, preview: Dict[str, Any], allowed_fol
     if not sug_name.lower().endswith(ext.lower()):
         sug_name = safe_filename(Path(sug_name).stem + ext)
 
-    folder = obj.get("suggested_folder", "_ToSort")
+    folder = obj.get("suggested_folder", UNSORTED_FOLDER)
     if folder not in allowed_folders:
-        folder = "_ToSort"
+        folder = UNSORTED_FOLDER
 
     conf = obj.get("confidence", 0.0)
     try:
@@ -799,7 +802,7 @@ def update_proposals():
         if it.get("status") != "candidate" or it.get("suggestion") is None:
             continue
         it["approved"] = (rel in approved_list)
-        new_folder = request.form.get(f"folder__{rel}", it.get("edited_folder", "_ToSort"))
+        new_folder = request.form.get(f"folder__{rel}", it.get("edited_folder", UNSORTED_FOLDER))
         new_name = request.form.get(f"name__{rel}", it.get("edited_name", it.get("name", "")))
         it["edited_folder"] = new_folder
         it["edited_name"] = safe_filename(new_name)
@@ -823,7 +826,7 @@ def apply():
             continue
         if not it.get("approved"):
             continue
-        dest_folder = it.get("edited_folder") or "_ToSort"
+        dest_folder = it.get("edited_folder") or UNSORTED_FOLDER
         new_name = it.get("edited_name") or it.get("name")
 
         ok, dest, err = apply_change(rootp, rel, dest_folder, new_name, mode=mode)
