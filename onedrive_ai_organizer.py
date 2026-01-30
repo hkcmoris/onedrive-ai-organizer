@@ -18,6 +18,7 @@ from openpyxl import load_workbook
 from PIL import Image
 
 APP_TITLE = "OneDrive Downloads AI Organizer (Selective + Safe)"
+PORT = 5000
 STATE_FILE = "organizer_state.json"
 ACTIONS_LOG = "organizer_actions_log.jsonl"
 
@@ -887,5 +888,5 @@ if __name__ == "__main__":
         save_state(load_state())
 
     print(f"{APP_TITLE}")
-    print("Open: http://127.0.0.1:5000")
-    app.run(host="127.0.0.1", port=5000, debug=False)
+    print("Open: http://127.0.0.1:" + str(PORT))
+    app.run(host="127.0.0.1", port=PORT, debug=False)
