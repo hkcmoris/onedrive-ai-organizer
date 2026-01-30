@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Dict, Any, List, Optional, Tuple
 
 import requests
+from openai import OpenAI
 from flask import Flask, request, redirect, url_for, render_template_string, jsonify
 
 # Optional extractors
@@ -46,6 +47,13 @@ ALLOWED_FOLDERS = [
     "Instalačky",
     UNSORTED_FOLDER,
 ]
+
+# ---- LLM config ----
+LLM_PROVIDER = "ollama"  # "ollama" or "openai"
+
+# ---- OpenAI config ----
+OPENAI_MODEL = "gpt-5-mini"  # fast + good for this task
+_openai_client = None
 
 # ---- Ollama config ----
 OLLAMA_URL = "http://127.0.0.1:11434/api/generate"
@@ -102,6 +110,12 @@ def render_page(content_html: str, **ctx):
     page = BASE_HTML.replace("{% block content %}{% endblock %}", content_html)
     return render_template_string(page, **ctx)
 
+def get_openai_client() -> OpenAI:
+    global _openai_client
+    if _openai_client is None:
+        _openai_client = OpenAI()  # reads OPENAI_API_KEY from env :contentReference[oaicite:5]{index=5}
+    return _openai_client
+
 # ---------------- State ------------------
 def load_state() -> Dict[str, Any]:
     if os.path.exists(STATE_FILE):
@@ -112,6 +126,9 @@ def load_state() -> Dict[str, Any]:
         "mode": DEFAULT_MODE,
         "items": {},  # key: relpath -> data
         "allowed_folders": ALLOWED_FOLDERS,
+        "llm_provider": LLM_PROVIDER,
+        "openai_model": OPENAI_MODEL,
+        "ollama_model": OLLAMA_MODEL,
     }
 
 def save_state(state: Dict[str, Any]) -> None:
@@ -295,6 +312,15 @@ def extract_preview(path: Path) -> Dict[str, Any]:
     return info
 
 # ---------------- LLM suggestion ----------------
+RULES = [
+    "Destination folder MUST be one of allowed_folders exactly.",
+    "Suggested filename must be in locale " + NAMING_LOCALE + " and keep the same extension.",
+    "Use clear names with dates if present (YYYY-MM-DD), otherwise omit date.",
+    "Avoid overly long names; <= 80 characters before extension is ideal.",
+    "If you can't infer, pick folder " + UNSORTED_FOLDER + " and keep filename similar.",
+    "Return JSON with keys: suggested_name, suggested_folder, confidence (0..1), reason."
+]
+
 def ollama_suggest(filename: str, ext: str, preview: Dict[str, Any], allowed_folders: List[str]) -> Dict[str, Any]:
     # Prompt designed to return strict JSON
     content_hint = preview.get("text", "")
@@ -313,14 +339,7 @@ def ollama_suggest(filename: str, ext: str, preview: Dict[str, Any], allowed_fol
         "kind": kind,
         "content_preview": content_hint[:MAX_TEXT_CHARS],
         "allowed_folders": allowed_folders,
-        "rules": [
-            "Destination folder MUST be one of allowed_folders exactly.",
-            "Suggested filename must be in locale " + NAMING_LOCALE + " and keep the same extension.",
-            "Use clear names with dates if present (YYYY-MM-DD), otherwise omit date.",
-            "Avoid overly long names; <= 80 characters before extension is ideal.",
-            "If you can't infer, pick folder " + UNSORTED_FOLDER + " and keep filename similar.",
-            "Return JSON with keys: suggested_name, suggested_folder, confidence (0..1), reason."
-        ]
+        "rules": RULES
     }
 
     payload = {
@@ -380,6 +399,76 @@ def ollama_suggest(filename: str, ext: str, preview: Dict[str, Any], allowed_fol
         "reason": reason
     }
 
+def openai_suggest(filename: str, ext: str, preview: Dict[str, Any], allowed_folders: List[str], model: str) -> Dict[str, Any]:
+    # Use Responses API (recommended) :contentReference[oaicite:6]{index=6}
+    content_hint = (preview.get("text") or "")[:MAX_TEXT_CHARS]
+    kind = preview.get("kind", "metadata")
+
+    prompt = {
+        "original_filename": filename,
+        "extension": ext,
+        "kind": kind,
+        "content_preview": content_hint,
+        "allowed_folders": allowed_folders,
+        "rules": RULES
+    }
+
+    client = get_openai_client()
+    resp = client.responses.create(
+        model=model,
+        input=[
+            {
+                "role": "user",
+                "content": [
+                    {"type": "input_text", "text": "Return ONLY valid JSON.\n\n" + json.dumps(prompt, ensure_ascii=False)}
+                ],
+            }
+        ],
+        # Keep outputs short/cheap; we only need JSON
+        max_output_tokens=300,
+    )
+
+    # Pull text output
+    out_text = ""
+    try:
+        # SDK returns output blocks; simplest is to join text parts
+        for item in resp.output:
+            for c in getattr(item, "content", []) or []:
+                if getattr(c, "type", "") in ("output_text", "text"):
+                    out_text += getattr(c, "text", "")
+    except Exception:
+        out_text = str(resp)
+
+    out_text = out_text.strip()
+    # parse JSON similar to ollama_suggest
+    start = out_text.find("{")
+    end = out_text.rfind("}")
+    if start == -1 or end == -1 or end <= start:
+        return {"suggested_name": filename, "suggested_folder": UNSORTED_FOLDER, "confidence": 0.0, "reason": "Model did not return JSON."}
+
+    try:
+        obj = json.loads(out_text[start:end+1])
+    except Exception:
+        return {"suggested_name": filename, "suggested_folder": UNSORTED_FOLDER, "confidence": 0.0, "reason": "Could not parse model JSON."}
+
+    sug_name = safe_filename(obj.get("suggested_name", filename))
+    if not sug_name.lower().endswith(ext.lower()):
+        sug_name = safe_filename(Path(sug_name).stem + ext)
+
+    folder = obj.get("suggested_folder", UNSORTED_FOLDER)
+    if folder not in allowed_folders:
+        folder = UNSORTED_FOLDER
+
+    try:
+        conf = float(obj.get("confidence", 0.0))
+    except Exception:
+        conf = 0.0
+    conf = max(0.0, min(1.0, conf))
+
+    reason = str(obj.get("reason", "")).strip()[:300]
+    return {"suggested_name": sug_name, "suggested_folder": folder, "confidence": conf, "reason": reason}
+
+
 # ---------------- File ops ----------------
 def apply_change(root: Path, rel: str, dest_folder: str, new_name: str, mode: str) -> Tuple[bool, str, str]:
     src = root / rel
@@ -438,6 +527,20 @@ def home():
               <button class="btn" type="submit">Save</button>
             </div>
           </form>
+
+          <form method="post" action="{{url_for('set_llm')}}" style="min-width:420px;">
+            <div class="muted">LLM provider</div>
+            <div class="row">
+              <select name="llm_provider">
+                <option value="ollama" {% if llm_provider=="ollama" %}selected{% endif %}>Ollama (local)</option>
+                <option value="openai" {% if llm_provider=="openai" %}selected{% endif %}>OpenAI API (fast)</option>
+              </select>
+              <input type="text" name="openai_model" placeholder="OpenAI model (e.g. gpt-5-mini)" value="{{openai_model}}" />
+              <input type="text" name="ollama_model" placeholder="Ollama model" value="{{ollama_model}}" />
+              <button class="btn" type="submit">Save</button>
+            </div>
+          </form>
+
         </div>
 
         <div style="height:8px"></div>
@@ -463,7 +566,18 @@ def home():
         </div>
       </div>
     """
-    return render_page(html, base=BASE_HTML, title=APP_TITLE, actions_log=ACTIONS_LOG, root=root, mode=state.get("mode", DEFAULT_MODE), counts=counts)
+    return render_page(
+        html,
+        base=BASE_HTML,
+        title=APP_TITLE,
+        actions_log=ACTIONS_LOG,
+        root=root,
+        mode=state.get("mode", DEFAULT_MODE),
+        counts=counts,
+        llm_provider=state.get("llm_provider", "ollama"),
+        openai_model=state.get("openai_model", OPENAI_MODEL),
+        ollama_model=state.get("ollama_model", OLLAMA_MODEL),
+    )
 
 @app.post("/set-root")
 def set_root():
@@ -479,6 +593,19 @@ def set_mode():
     if mode not in ["move", "copy"]:
         mode = DEFAULT_MODE
     state["mode"] = mode
+    save_state(state)
+    return redirect(url_for("home"))
+
+@app.post("/set-llm")
+def set_llm():
+    state = load_state()
+    provider = request.form.get("llm_provider", "ollama").strip()
+    if provider not in ["ollama", "openai"]:
+        provider = "ollama"
+
+    state["llm_provider"] = provider
+    state["openai_model"] = request.form.get("openai_model", OPENAI_MODEL).strip() or OPENAI_MODEL
+    state["ollama_model"] = request.form.get("ollama_model", OLLAMA_MODEL).strip() or OLLAMA_MODEL
     save_state(state)
     return redirect(url_for("home"))
 
@@ -683,6 +810,9 @@ def suggest():
     root = state.get("root", "")
     items = state.get("items", {})
     allowed = state.get("allowed_folders", ALLOWED_FOLDERS)
+    provider = state.get("llm_provider", "ollama")
+    openai_model = state.get("openai_model", OPENAI_MODEL)
+    ollama_model = state.get("ollama_model", OLLAMA_MODEL)
 
     rootp = Path(root)
     # Run suggestions for candidates that don't have a suggestion yet
@@ -697,7 +827,11 @@ def suggest():
         if it.get("preview") is None:
             it["preview"] = extract_preview(fp)
 
-        sug = ollama_suggest(it["name"], it["ext"], it["preview"], allowed)
+        if provider == "openai":
+            sug = openai_suggest(it["name"], it["ext"], it["preview"], allowed, model=openai_model)
+        else:
+            sug = ollama_suggest(it["name"], it["ext"], it["preview"], allowed)
+
         it["suggestion"] = sug
         it["edited_name"] = sug["suggested_name"]
         it["edited_folder"] = sug["suggested_folder"]
