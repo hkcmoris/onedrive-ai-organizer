@@ -916,7 +916,7 @@ def proposals():
         </form>
       </div>
     """
-    # Jinja can't access dot keys reliably, so map suggestion keys
+    
     for r in rows:
         r["suggestion"] = r["suggestion"] or {}
         r["suggestion"]["confidence"] = float(r["suggestion"].get("confidence", 0.0))
