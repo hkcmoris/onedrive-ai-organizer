@@ -6,11 +6,11 @@ import shutil
 import hashlib
 from datetime import datetime
 from pathlib import Path
-from typing import Dict, Any, List, Optional, Tuple
+from typing import Dict, Any, List, Tuple
 
 import requests
 from openai import OpenAI
-from flask import Flask, request, redirect, url_for, render_template_string, jsonify
+from flask import Flask, request, redirect, url_for, render_template_string
 
 # Optional extractors
 import pdfplumber
@@ -100,20 +100,19 @@ BASE_HTML = r"""
   <h2>{{title}}</h2>
   <div class="muted">Local only. Nothing happens until you approve. Logs written to <span class="mono">{{actions_log}}</span></div>
   <div style="height:10px"></div>
-  {% block content %}{% endblock %}
+  {{ content|safe }}
 </body>
 </html>
 """
 
 # ---------------- Helpers ----------------
 def render_page(content_html: str, **ctx):
-    page = BASE_HTML.replace("{% block content %}{% endblock %}", content_html)
-    return render_template_string(page, **ctx)
+    return render_template_string(BASE_HTML, content=content_html, **ctx)
 
 def get_openai_client() -> OpenAI:
     global _openai_client
     if _openai_client is None:
-        _openai_client = OpenAI()  # reads OPENAI_API_KEY from env :contentReference[oaicite:5]{index=5}
+        _openai_client = OpenAI()  # reads OPENAI_API_KEY from env
     return _openai_client
 
 # ---------------- State ------------------
@@ -321,7 +320,7 @@ RULES = [
     "Return JSON with keys: suggested_name, suggested_folder, confidence (0..1), reason."
 ]
 
-def ollama_suggest(filename: str, ext: str, preview: Dict[str, Any], allowed_folders: List[str]) -> Dict[str, Any]:
+def ollama_suggest(filename: str, ext: str, preview: Dict[str, Any], allowed_folders: List[str], model: str) -> Dict[str, Any]:
     # Prompt designed to return strict JSON
     content_hint = preview.get("text", "")
     kind = preview.get("kind", "metadata")
@@ -343,7 +342,7 @@ def ollama_suggest(filename: str, ext: str, preview: Dict[str, Any], allowed_fol
     }
 
     payload = {
-        "model": OLLAMA_MODEL,
+        "model": model,
         "prompt": system + "\n\nTASK:\n" + json.dumps(user, ensure_ascii=False),
         "stream": False,
         "options": {"temperature": 0.2}
@@ -400,7 +399,7 @@ def ollama_suggest(filename: str, ext: str, preview: Dict[str, Any], allowed_fol
     }
 
 def openai_suggest(filename: str, ext: str, preview: Dict[str, Any], allowed_folders: List[str], model: str) -> Dict[str, Any]:
-    # Use Responses API (recommended) :contentReference[oaicite:6]{index=6}
+    # Use Responses API (recommended)
     content_hint = (preview.get("text") or "")[:MAX_TEXT_CHARS]
     kind = preview.get("kind", "metadata")
 
@@ -568,7 +567,6 @@ def home():
     """
     return render_page(
         html,
-        base=BASE_HTML,
         title=APP_TITLE,
         actions_log=ACTIONS_LOG,
         root=root,
@@ -736,7 +734,7 @@ def review():
       </div>
     """
     return render_page(
-        html, base=BASE_HTML, title="Review & Tag", actions_log=ACTIONS_LOG,
+        html, title="Review & Tag", actions_log=ACTIONS_LOG,
         root=root, rows=rows, q=q, filt=filt, human_size=human_size
     )
 
@@ -798,7 +796,7 @@ def preview():
       </div>
     """
     return render_page(
-        html, base=BASE_HTML, title="Preview", actions_log=ACTIONS_LOG,
+        html, title="Preview", actions_log=ACTIONS_LOG,
         rel=rel, kind=kind, notes=notes, text=text, status=it.get("status", "candidate")
     )
 
@@ -830,7 +828,8 @@ def suggest():
         if provider == "openai":
             sug = openai_suggest(it["name"], it["ext"], it["preview"], allowed, model=openai_model)
         else:
-            sug = ollama_suggest(it["name"], it["ext"], it["preview"], allowed)
+            sug = ollama_suggest(it["name"], it["ext"], it["preview"], allowed, model=ollama_model)
+
 
         it["suggestion"] = sug
         it["edited_name"] = sug["suggested_name"]
@@ -866,7 +865,8 @@ def proposals():
         <div class="row">
           <a class="btn" href="{{url_for('home')}}">← Home</a>
           <a class="btn" href="{{url_for('review')}}">Review tags</a>
-          <a class="btn" href="{{url_for('suggest')}}">Run AI (remaining)</a>
+          <a class="btn" href="{{url_for('suggest')}}?limit=10">Run AI (next 10)</a>
+          <a class="btn" href="{{url_for('suggest')}}?limit=25">Run AI (next 25)</a>
           <a class="btn ok" href="{{url_for('apply')}}">Apply approved</a>
         </div>
         <div class="muted">Auto-approved if confidence ≥ 0.75 (you can change). Nothing applied yet.</div>
@@ -922,7 +922,7 @@ def proposals():
         r["suggestion"]["confidence"] = float(r["suggestion"].get("confidence", 0.0))
         r["suggestion"]["reason"] = r["suggestion"].get("reason", "")
     return render_page(
-        html, base=BASE_HTML, title="AI Proposals", actions_log=ACTIONS_LOG,
+        html, title="AI Proposals", actions_log=ACTIONS_LOG,
         rows=rows, allowed=allowed
     )
 
@@ -1012,7 +1012,7 @@ def apply():
       </div>
     """
     return render_page(
-        html, base=BASE_HTML, title="Apply Results", actions_log=ACTIONS_LOG,
+        html, title="Apply Results", actions_log=ACTIONS_LOG,
         results=results, mode=mode
     )
 
