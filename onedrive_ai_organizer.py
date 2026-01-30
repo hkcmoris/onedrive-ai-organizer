@@ -1026,7 +1026,6 @@ def update_proposals():
 
         it["edited_name"] = new_name
         it["edited_folder"] = new_folder
-        it["edited_name"] = safe_filename(new_name)
         items[rel] = it
 
     state["items"] = items
