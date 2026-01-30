@@ -455,23 +455,34 @@ def openai_suggest(filename: str, ext: str, preview: Dict[str, Any], allowed_fol
             {
                 "role": "user",
                 "content": [
-                    {"type": "input_text", "text": "Return ONLY valid JSON.\n\n" + json.dumps(prompt, ensure_ascii=False)}
+                    {"type": "input_text", "text": json.dumps(prompt, ensure_ascii=False)}
                 ],
             }
         ],
         # Keep outputs short/cheap; we only need JSON
+        response_format={"type": "json_object"},
         max_output_tokens=300,
     )
 
     # Pull text output
-    out_text = ""
+    out_text = (getattr(resp, "output_text", "") or "").strip()
+    if not out_text:
+        return {
+            "suggested_name": filename,
+            "suggested_folder": UNSORTED_FOLDER,
+            "confidence": 0.0,
+            "reason": "Empty model output."
+        }
+
     try:
-        out_text = getattr(resp, "output_text", "") or ""
+        obj = json.loads(out_text)
     except Exception:
-        out_text = ""
-    if not out_text.strip():
-        out_text = str(resp)
-    out_text = out_text.strip()
+        return {
+            "suggested_name": filename,
+            "suggested_folder": UNSORTED_FOLDER,
+            "confidence": 0.0,
+            "reason": "Model returned non-JSON."
+        }
 
     # parse JSON similar to ollama_suggest
     start = out_text.find("{")
@@ -729,7 +740,7 @@ def review():
 
         rows_html += f"""
           <tr>
-            <td><input type="checkbox" name="sel" value="{rel_esc}"/></td>
+            <td><input type="checkbox" name="sel" value="{rel_esc}" onchange="syncMasterCheckbox('sel_all')"/></td>
             <td>
             <div class="mono">{rel_esc}</div>
             <div class="muted">{ext_esc}</div>
