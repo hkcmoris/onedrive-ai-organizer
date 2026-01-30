@@ -1,4 +1,5 @@
 organizer_state.json
+organizer_actions_log.jsonl
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
