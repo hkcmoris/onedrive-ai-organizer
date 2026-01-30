@@ -7,6 +7,7 @@ import hashlib
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, Any, List, Tuple
+from html import escape
 
 import requests
 from openai import OpenAI
@@ -17,6 +18,9 @@ import pdfplumber
 from docx import Document
 from openpyxl import load_workbook
 from PIL import Image
+
+from dotenv import load_dotenv
+load_dotenv()
 
 APP_TITLE = "OneDrive Downloads AI Organizer (Selective + Safe)"
 PORT = 5000
@@ -499,6 +503,7 @@ app = Flask(__name__)
 def home():
     state = load_state()
     root = state.get("root", "")
+
     items = state.get("items", {})
     counts = {"total": len(items), "never": 0, "cand": 0, "done": 0}
     for v in items.values():
@@ -510,37 +515,52 @@ def home():
         else:
             counts["cand"] += 1
 
-    html = """
+    mode = state.get("mode", DEFAULT_MODE)    
+    openai_model = state.get("openai_model", OPENAI_MODEL)
+    ollama_model = state.get("ollama_model", OLLAMA_MODEL)
+    llm_provider = state.get("llm_provider", LLM_PROVIDER)
+
+    mode_move_sel = "selected" if mode == "move" else ""
+    mode_copy_sel = "selected" if mode == "copy" else ""
+
+    ollama_sel = "selected" if llm_provider == "ollama" else ""
+    openai_sel = "selected" if llm_provider == "openai" else ""
+
+    root_esc = escape(root, quote=True)
+    openai_model_esc = escape(openai_model, quote=True)
+    ollama_model_esc = escape(ollama_model, quote=True)
+
+    html = f"""
       <div class="card">
         <div class="row">
-          <form method="post" action="{{url_for('set_root')}}" style="flex:1; min-width:320px;">
-            <div class="muted">Root folder to scan (your OneDrive Downloads path)</div>
+          <form method="post" action="{url_for('set_root')}" style="flex:1; min-width:320px;">
+            <div class="muted">Root folder to scan (your OneDrive path)</div>
             <div class="row">
-              <input type="text" name="root" placeholder="C:/Users/You/OneDrive/Downloads" value="{{root}}" />
+              <input type="text" name="root" placeholder="C:/Users/You/OneDrive" value="{root_esc}" />
               <button class="btn" type="submit">Set</button>
             </div>
           </form>
 
-          <form method="post" action="{{url_for('set_mode')}}" style="min-width:260px;">
+          <form method="post" action="{url_for('set_mode')}" style="min-width:260px;">
             <div class="muted">Apply mode</div>
             <div class="row">
               <select name="mode">
-                <option value="move" {% if mode=="move" %}selected{% endif %}>Move (default)</option>
-                <option value="copy" {% if mode=="copy" %}selected{% endif %}>Copy (safer)</option>
+                <option value="move" {mode_move_sel}>Move (default)</option>
+                <option value="copy" {mode_copy_sel}>Copy (safer)</option>
               </select>
               <button class="btn" type="submit">Save</button>
             </div>
           </form>
 
-          <form method="post" action="{{url_for('set_llm')}}" style="min-width:420px;">
+          <form method="post" action="{url_for('set_llm')}" style="min-width:420px;">
             <div class="muted">LLM provider</div>
             <div class="row">
               <select name="llm_provider">
-                <option value="ollama" {% if llm_provider=="ollama" %}selected{% endif %}>Ollama (local)</option>
-                <option value="openai" {% if llm_provider=="openai" %}selected{% endif %}>OpenAI API (fast)</option>
+                <option value="ollama" {ollama_sel}>Ollama (local)</option>
+                <option value="openai" {openai_sel}>OpenAI API (fast)</option>
               </select>
-              <input type="text" name="openai_model" placeholder="OpenAI model (e.g. gpt-5-mini)" value="{{openai_model}}" />
-              <input type="text" name="ollama_model" placeholder="Ollama model" value="{{ollama_model}}" />
+              <input type="text" name="openai_model" placeholder="OpenAI model (e.g. gpt-5-mini)" value="{openai_model_esc}" />
+              <input type="text" name="ollama_model" placeholder="Ollama model" value="{ollama_model_esc}" />
               <button class="btn" type="submit">Save</button>
             </div>
           </form>
@@ -549,20 +569,20 @@ def home():
 
         <div style="height:8px"></div>
         <div class="row">
-          <a class="btn" href="{{url_for('scan')}}">Scan folder</a>
-          <a class="btn" href="{{url_for('review')}}">Review & tag (Never touch / Candidate)</a>
-          <a class="btn" href="{{url_for('suggest')}}?limit=10">AI suggest (next 10)</a>
-          <a class="btn" href="{{url_for('suggest')}}?limit=25">AI suggest (next 25)</a>
-          <a class="btn ok" href="{{url_for('apply')}}">Apply approved changes</a>
+          <a class="btn" href="{url_for('scan')}">Scan folder</a>
+          <a class="btn" href="{url_for('review')}">Review & tag (Never touch / Candidate)</a>
+          <a class="btn" href="{url_for('suggest')}?limit=10">AI suggest (next 10)</a>
+          <a class="btn" href="{url_for('suggest')}?limit=25">AI suggest (next 25)</a>
+          <a class="btn ok" href="{url_for('apply')}">Apply approved changes</a>
         </div>
       </div>
 
       <div class="card">
         <div class="row">
-          <div><span class="tag">Total: {{counts.total}}</span></div>
-          <div><span class="tag never">Never touch: {{counts.never}}</span></div>
-          <div><span class="tag cand">Candidates: {{counts.cand}}</span></div>
-          <div><span class="tag done">Done: {{counts.done}}</span></div>
+          <div><span class="tag">Total: {counts['total']}</span></div>
+          <div><span class="tag never">Never touch: {counts['never']}</span></div>
+          <div><span class="tag cand">Candidates: {counts['cand']}</span></div>
+          <div><span class="tag done">Done: {counts['done']}</span></div>
         </div>
         <div style="height:8px"></div>
         <div class="muted">
@@ -574,12 +594,6 @@ def home():
         html,
         title=APP_TITLE,
         actions_log=ACTIONS_LOG,
-        root=root,
-        mode=state.get("mode", DEFAULT_MODE),
-        counts=counts,
-        llm_provider=state.get("llm_provider", "ollama"),
-        openai_model=state.get("openai_model", OPENAI_MODEL),
-        ollama_model=state.get("ollama_model", OLLAMA_MODEL),
     )
 
 @app.post("/set-root")
@@ -673,26 +687,59 @@ def review():
 
     rows.sort(key=lambda x: x["rel"].lower())
 
-    html = """
+    root_esc = escape(root, quote=True)
+    q_esc = escape(q, quote=True)
+
+    rows_html = ""
+    for r in rows:
+        if r["status"]=="never":
+            status_html = '<span class="tag never">Never</span>'
+        elif r["status"]=="done":
+            status_html = '<span class="tag done">Done</span>'
+        else:
+            status_html = '<span class="tag cand">Candidate</span>'
+
+        rel_esc = escape(r["rel"], quote=True)
+        ext_esc = escape(r["ext"], quote=True)
+
+        rows_html += f"""
+          <tr>
+            <td><input type="checkbox" name="sel" value="{rel_esc}"/></td>
+            <td>
+            <div class="mono">{rel_esc}</div>
+            <div class="muted">{ext_esc}</div>
+            </td>
+            <td>{human_size(r['size'])}</td>
+            <td class="small">{r['mtime']}</td>
+            <td>
+            {status_html}
+            </td>
+            <td>
+            <a class="btn" href="{url_for('preview', rel=r['rel'])}">Open</a>
+            </td>
+          </tr>
+        """
+
+    html = f"""
       <div class="card">
         <div class="row">
-          <a class="btn" href="{{url_for('home')}}">← Home</a>
-          <form method="get" action="{{url_for('review')}}" style="flex:1; min-width:280px;">
-            <input type="text" name="q" placeholder="Search path/name…" value="{{q}}" />
-            <input type="hidden" name="f" value="{{filt}}" />
+          <a class="btn" href="{url_for('home')}">← Home</a>
+          <form method="get" action="{url_for('review')}" style="flex:1; min-width:280px;">
+            <input type="text" name="q" placeholder="Search path/name…" value="{q_esc}" />
+            <input type="hidden" name="f" value="{filt}" />
           </form>
           <div>
-            <a class="btn" href="{{url_for('review', f='all', q=q)}}">All</a>
-            <a class="btn" href="{{url_for('review', f='candidate', q=q)}}">Candidate</a>
-            <a class="btn" href="{{url_for('review', f='never', q=q)}}">Never touch</a>
-            <a class="btn" href="{{url_for('review', f='done', q=q)}}">Done</a>
+            <a class="btn" href="{url_for('review', f='all', q=q)}">All</a>
+            <a class="btn" href="{url_for('review', f='candidate', q=q)}">Candidate</a>
+            <a class="btn" href="{url_for('review', f='never', q=q)}">Never touch</a>
+            <a class="btn" href="{url_for('review', f='done', q=q)}">Done</a>
           </div>
         </div>
-        <div class="muted">Root: <span class="mono">{{root}}</span></div>
+        <div class="muted">Root: <span class="mono">{root_esc}</span></div>
       </div>
 
       <div class="card">
-        <form method="post" action="{{url_for('bulk_set_status')}}">
+        <form method="post" action="{url_for('bulk_set_status')}">
           <div class="row">
             <select name="new_status">
               <option value="candidate">Set selected → Candidate</option>
@@ -712,36 +759,15 @@ def review():
               <th style="width:130px;">Status</th>
               <th style="width:140px;">Preview</th>
             </tr>
-            {% for r in rows %}
-            <tr>
-              <td><input type="checkbox" name="sel" value="{{r.rel}}"/></td>
-              <td>
-                <div class="mono">{{r.rel}}</div>
-                <div class="muted">{{r.ext}}</div>
-              </td>
-              <td>{{human_size(r.size)}}</td>
-              <td class="small">{{r.mtime}}</td>
-              <td>
-                {% if r.status=="never" %}
-                  <span class="tag never">Never</span>
-                {% elif r.status=="done" %}
-                  <span class="tag done">Done</span>
-                {% else %}
-                  <span class="tag cand">Candidate</span>
-                {% endif %}
-              </td>
-              <td>
-                <a class="btn" href="{{url_for('preview', rel=r.rel)}}">Open</a>
-              </td>
-            </tr>
-            {% endfor %}
+            {rows_html}
           </table>
         </form>
       </div>
     """
     return render_page(
-        html, title="Review & Tag", actions_log=ACTIONS_LOG,
-        root=root, rows=rows, q=q, filt=filt, human_size=human_size
+        html,
+        title="Review & Tag",
+        actions_log=ACTIONS_LOG
     )
 
 @app.post("/bulk-set-status")
@@ -784,26 +810,39 @@ def preview():
     notes = pv.get("notes", "")
     kind = pv.get("kind", "")
 
-    html = """
+    status = it.get("status", "candidate")
+    status_html = ""
+    if status == "never":
+        status_html = '<span class="tag never">Never</span>'
+    elif status == "candidate":
+        status_html = '<span class="tag cand">Candidate</span>'
+    elif status == "done":
+        status_html = '<span class="tag done">Done</span>'
+
+    rel_esc = escape(rel, quote=True)
+    kind_esc = escape(kind, quote=True)
+    notes_esc = escape(notes, quote=True)
+    text_esc = escape(text)
+
+    html = f"""
       <div class="card">
         <div class="row">
-          <a class="btn" href="{{url_for('review')}}">← Back</a>
-          <div class="mono">{{rel}}</div>
-          {% if status=="never" %}<span class="tag never">Never</span>{% endif %}
-          {% if status=="candidate" %}<span class="tag cand">Candidate</span>{% endif %}
-          {% if status=="done" %}<span class="tag done">Done</span>{% endif %}
+          <a class="btn" href="{url_for('review')}">← Back</a>
+          <div class="mono">{rel_esc}</div>
+          {status_html}
         </div>
-        <div class="muted">Kind: <b>{{kind}}</b> | Notes: {{notes}}</div>
+        <div class="muted">Kind: <b>{kind_esc}</b> | Notes: {notes_esc}</div>
       </div>
 
       <div class="card">
         <div class="muted">Extracted preview (for AI):</div>
-        <pre style="white-space:pre-wrap; font-family: ui-monospace, Menlo, Consolas, monospace; font-size:12px;">{{text}}</pre>
+        <pre style="white-space:pre-wrap; font-family: ui-monospace, Menlo, Consolas, monospace; font-size:12px;">{text_esc}</pre>
       </div>
     """
     return render_page(
-        html, title="Preview", actions_log=ACTIONS_LOG,
-        rel=rel, kind=kind, notes=notes, text=text, status=it.get("status", "candidate")
+        html,
+        title="Preview",
+        actions_log=ACTIONS_LOG,
     )
 
 @app.get("/suggest")
@@ -868,20 +907,56 @@ def proposals():
             rows.append(it)
     rows.sort(key=lambda x: (-(x["suggestion"].get("confidence", 0.0)), x["rel"].lower()))
 
-    html = """
+    rows_html = ""
+    for r in rows:
+        options_html = ""
+        for f in allowed:
+            selected = "selected" if r.get("edited_folder") == f else ""
+            f_esc = escape(f, quote=True)
+            options_html += f'<option value="{f_esc}" {selected}>{escape(f)}</option>'
+        
+        conf = float(r['suggestion'].get('confidence', 0.0) or 0.0)
+        
+        name_esc = escape(r.get("edited_name",""), quote=True)
+        reason_esc = escape(r["suggestion"].get("reason",""))
+        rel_esc = escape(r["rel"], quote=True)
+
+        rows_html += f"""
+          <tr>
+            <td>
+              <input type="checkbox" name="appr" value="{r['key']}" {'checked' if r.get('approved') else ''}/>
+            </td>
+            <td>
+              <div class="mono">{rel_esc}</div>
+              <div class="muted small"><a href="{url_for('preview', rel=r['rel'])}">preview</a></div>
+            </td>
+            <td>
+              <select name="folder__{r['key']}">
+                {options_html}
+              </select>
+            </td>
+            <td>
+              <input type="text" name="name__{r['key']}" value="{name_esc}"/>
+            </td>
+            <td class="mono">{conf:.2f}</td>
+            <td class="small">{reason_esc}</td>
+          </tr>
+        """
+
+    html = f"""
       <div class="card">
         <div class="row">
-          <a class="btn" href="{{url_for('home')}}">← Home</a>
-          <a class="btn" href="{{url_for('review')}}">Review tags</a>
-          <a class="btn" href="{{url_for('suggest')}}?limit=10">Run AI (next 10)</a>
-          <a class="btn" href="{{url_for('suggest')}}?limit=25">Run AI (next 25)</a>
-          <a class="btn ok" href="{{url_for('apply')}}">Apply approved</a>
+          <a class="btn" href="{url_for('home')}">← Home</a>
+          <a class="btn" href="{url_for('review')}">Review tags</a>
+          <a class="btn" href="{url_for('suggest')}?limit=10">Run AI (next 10)</a>
+          <a class="btn" href="{url_for('suggest')}?limit=25">Run AI (next 25)</a>
+          <a class="btn ok" href="{url_for('apply')}">Apply approved</a>
         </div>
         <div class="muted">Auto-approved if confidence ≥ 0.75 (you can change). Nothing applied yet.</div>
       </div>
 
       <div class="card">
-        <form method="post" action="{{url_for('update_proposals')}}">
+        <form method="post" action="{url_for('update_proposals')}">
           <table>
             <tr>
               <th style="width:72px;">Approve</th>
@@ -891,35 +966,13 @@ def proposals():
               <th style="width:90px;">Conf.</th>
               <th>Reason</th>
             </tr>
-            {% for r in rows %}
-            <tr>
-              <td>
-                <input type="checkbox" name="appr" value="{{r.key}}" {% if r.approved %}checked{% endif %}/>
-              </td>
-              <td>
-                <div class="mono">{{r.rel}}</div>
-                <div class="muted small"><a href="{{url_for('preview', rel=r.rel)}}">preview</a></div>
-              </td>
-              <td>
-                <select name="folder__{{r.key}}">
-                  {% for f in allowed %}
-                    <option value="{{f}}" {% if r.edited_folder==f %}selected{% endif %}>{{f}}</option>
-                  {% endfor %}
-                </select>
-              </td>
-              <td>
-                <input type="text" name="name__{{r.key}}" value="{{r.edited_name}}"/>
-              </td>
-              <td class="mono">{{"%.2f"|format(r.suggestion.confidence)}}</td>
-              <td class="small">{{r.suggestion.reason}}</td>
-            </tr>
-            {% endfor %}
+            {rows_html}
           </table>
 
           <div style="height:10px"></div>
           <div class="row">
             <button class="btn" type="submit">Save edits</button>
-            <a class="btn ok" href="{{url_for('apply')}}">Apply approved</a>
+            <a class="btn ok" href="{url_for('apply')}">Apply approved</a>
           </div>
         </form>
       </div>
@@ -929,9 +982,11 @@ def proposals():
         r["suggestion"] = r["suggestion"] or {}
         r["suggestion"]["confidence"] = float(r["suggestion"].get("confidence", 0.0))
         r["suggestion"]["reason"] = r["suggestion"].get("reason", "")
+    
     return render_page(
-        html, title="AI Proposals", actions_log=ACTIONS_LOG,
-        rows=rows, allowed=allowed
+        html,
+        title="AI Proposals",
+        actions_log=ACTIONS_LOG,
     )
 
 @app.post("/update-proposals")
@@ -959,8 +1014,17 @@ def update_proposals():
         it["approved"] = (key in approved_keys)
 
         new_folder = request.form.get(f"folder__{key}", it.get("edited_folder", UNSORTED_FOLDER))
+        allowed = set(state.get("allowed_folders", ALLOWED_FOLDERS))
+        if new_folder not in allowed:
+            new_folder = UNSORTED_FOLDER
         new_name = request.form.get(f"name__{key}", it.get("edited_name", it.get("name", "")))
-        
+        orig_ext = (it.get("ext") or "").lower()
+        new_name = safe_filename(new_name)
+
+        if orig_ext and not new_name.lower().endswith(orig_ext):
+            new_name = safe_filename(Path(new_name).stem + orig_ext)
+
+        it["edited_name"] = new_name
         it["edited_folder"] = new_folder
         it["edited_name"] = safe_filename(new_name)
         items[rel] = it
@@ -1008,13 +1072,28 @@ def apply():
     state["items"] = items
     save_state(state)
 
-    html = """
+    results_html = ""
+    for r in results:
+        rel_esc = escape(r["rel"])
+        dest_esc = escape(r["dest"])
+        err_esc = escape(r["err"])
+
+        results_html += f"""
+          <tr>
+            <td>{'<span class="tag done">OK</span>' if r['ok'] else '<span class="tag never">FAIL</span>'}</td>
+            <td class="mono">{rel_esc}</td>
+            <td class="mono">{dest_esc}</td>
+            <td class="small">{err_esc}</td>
+          </tr>
+        """
+
+    html = f"""
       <div class="card">
         <div class="row">
-          <a class="btn" href="{{url_for('home')}}">← Home</a>
-          <a class="btn" href="{{url_for('proposals')}}">Back to proposals</a>
+          <a class="btn" href="{url_for('home')}">← Home</a>
+          <a class="btn" href="{url_for('proposals')}">Back to proposals</a>
         </div>
-        <div class="muted">Applied {{results|length}} approved items (mode: <b>{{mode}}</b>).</div>
+        <div class="muted">Applied {len(results)} approved items (mode: <b>{mode}</b>).</div>
       </div>
 
       <div class="card">
@@ -1022,20 +1101,14 @@ def apply():
           <tr>
             <th>Result</th><th>Original</th><th>Destination</th><th>Error</th>
           </tr>
-          {% for r in results %}
-          <tr>
-            <td>{% if r.ok %}<span class="tag done">OK</span>{% else %}<span class="tag never">FAIL</span>{% endif %}</td>
-            <td class="mono">{{r.rel}}</td>
-            <td class="mono">{{r.dest}}</td>
-            <td class="small">{{r.err}}</td>
-          </tr>
-          {% endfor %}
+          {results_html}
         </table>
       </div>
     """
     return render_page(
-        html, title="Apply Results", actions_log=ACTIONS_LOG,
-        results=results, mode=mode
+        html,
+        title="Apply Results",
+        actions_log=ACTIONS_LOG,
     )
 
 if __name__ == "__main__":
