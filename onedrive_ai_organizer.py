@@ -88,9 +88,10 @@ BASE_HTML = r"""
     .card { border: 1px solid #ddd; border-radius: 12px; padding: 14px; margin: 12px 0; }
     .muted { color: #666; font-size: 12px; }
     table { border-collapse: collapse; width: 100%; }
-    th, td { border-bottom: 1px solid #eee; padding: 10px 8px; vertical-align: top; }
+    th, td { border-bottom: 1px solid #eee; padding: 10px 8px; }
     th { text-align: left; position: sticky; top: 0; background: #fff; border-bottom: 1px solid #ddd; }
-    input[type="text"] { width: 100%; padding: 8px; border-radius: 10px; border: 1px solid #ddd; }
+    input[type="text"] { flex: 1; padding: 8px; border-radius: 10px; border: 1px solid #ddd; }
+    input[type="checkbox"] { width: 20px; height: 20px; }
     select { padding: 8px; border-radius: 10px; border: 1px solid #ddd; }
     .btn { display: inline-block; padding: 9px 12px; border-radius: 10px; border: 1px solid #ddd; background: #f7f7f7; cursor: pointer; text-decoration: none; color: #111; }
     .btn:hover { background: #efefef; }
@@ -109,6 +110,30 @@ BASE_HTML = r"""
   <div class="muted">Local only. Nothing happens until you approve. Logs written to <span class="mono">{{actions_log}}</span></div>
   <div style="height:10px"></div>
   {{ content|safe }}
+  <script>
+    function toggleAllInTable(master) {
+        const table = master.closest("table");
+        if (!table) return;
+
+        const boxes = table.querySelectorAll('input[type="checkbox"][name="sel"]');
+        boxes.forEach(cb => { cb.checked = master.checked; });
+    }
+
+    function syncMasterCheckbox(masterId) {
+        const master = document.getElementById(masterId);
+        if (!master) return;
+
+        const table = master.closest("table");
+        if (!table) return;
+
+        const boxes = Array.from(table.querySelectorAll('input[type="checkbox"][name="sel"]'));
+        if (boxes.length === 0) { master.checked = false; master.indeterminate = false; return; }
+
+        const checked = boxes.filter(cb => cb.checked).length;
+        master.checked = checked === boxes.length;
+        master.indeterminate = checked > 0 && checked < boxes.length;
+    }
+  </script>
 </body>
 </html>
 """
@@ -752,7 +777,14 @@ def review():
           <div style="height:10px"></div>
           <table>
             <tr>
-              <th style="width:36px;"></th>
+              <th style="width:36px;">
+              <input
+                type="checkbox"
+                id="sel_all"
+                onclick="toggleAllInTable(this)"
+                aria-label="Select all"
+              />
+              </th>
               <th>File</th>
               <th style="width:120px;">Size</th>
               <th style="width:170px;">Modified</th>
